@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ku" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>سیستەمی سکانەری زیرەک | Smart School</title>
+    
+    <style>
+        :root { --bg: #0f172a; --card: #1e293b; --accent: #3b82f6; --success: #10b981; --danger: #ef4444; }
+        body { margin: 0; font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--bg); color: white; display: flex; height: 100vh; overflow: hidden; }
+        
+        /* Sidebar */
+        .sidebar { width: 380px; background: var(--card); padding: 25px; border-left: 1px solid rgba(255,255,255,0.05); display: flex; flex-direction: column; box-shadow: -5px 0 20px rgba(0,0,0,0.3); }
+        .sidebar h2 { color: var(--accent); text-align: center; margin-bottom: 20px; font-size: 1.4rem; border-bottom: 2px solid #334155; padding-bottom: 10px; }
+        
+        .stat-box { background: rgba(0,0,0,0.2); padding: 15px; border-radius: 12px; text-align: center; margin-bottom: 20px; display: flex; justify-content: space-around; }
+        .stat-item span { display: block; font-size: 1.5rem; font-weight: bold; }
+
+        #absentList { flex-grow: 1; overflow-y: auto; list-style: none; padding: 0; margin-top: 10px; }
+        .absent-item { background: rgba(239, 68, 68, 0.1); margin-bottom: 10px; padding: 12px 15px; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; border-right: 4px solid var(--danger); animation: fadeIn 0.5s ease; }
+        
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Main Content */
+        .main-content { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+        .stu-display { background: var(--card); width: 420px; padding: 40px; border-radius: 35px; text-align: center; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 25px 50px rgba(0,0,0,0.5); }
+        .stu-img { width: 180px; height: 180px; border-radius: 50%; border: 6px solid var(--accent); object-fit: cover; background: #000; margin-bottom: 20px; }
+        
+        .btn { color: white; border: none; padding: 12px 25px; border-radius: 12px; cursor: pointer; font-weight: bold; transition: 0.3s; }
+        .btn-arduino { background: #475569; position: absolute; top: 30px; left: 30px; border: 1px dashed var(--accent); }
+        .btn-finish { background: var(--danger); width: 100%; margin-top: 15px; padding: 18px; font-size: 1.1rem; }
+        #scanFeedback { font-size: 1.2rem; min-height: 30px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <h2>⚠️ لیستی غایبان</h2>
+        <div class="stat-box">
+            <div class="stat-item"><span id="pCount" style="color:var(--success)">0</span> ئامادە</div>
+            <div class="stat-item"><span id="aCount" style="color:var(--danger)">0</span> غایب</div>
+        </div>
+        <div id="absentList"></div>
+        <button class="btn btn-finish" onclick="finishDay()">🏁 کۆتاییهێنان بە دەوام</button>
+    </div>
+
+    <div class="main-content">
+        <button class="btn btn-arduino" id="connBtn" onclick="toggleArduino()">🔌 پەیوەستکردنی ئاردینۆ</button>
+        
+        <div class="stu-display">
+            <img id="stuImg" src="images/default.jpg" class="stu-img" onerror="this.src='https://via.placeholder.com/180?text=No+Photo'">
+            <h1 id="stuName" style="margin: 10px 0; font-size: 2.2rem;">بەخێربێیت</h1>
+            <p id="stuClass" style="color:#94a3b8; font-size: 1.3rem;">تکایە کارتەکە سکان بکە</p>
+            <div id="scanFeedback"></div>
+        </div>
+    </div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getFirestore, collection, getDocs, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    const firebaseConfig = { 
+        apiKey: "AIzaSyCNE5SrgyfTV6_6fieRCLaKPyAGk0ox-FM", 
+        authDomain: "school-system-4d4da.firebaseapp.com", 
+        projectId: "school-system-4d4da", 
+        appId: "1:554610137178:web:4b549d67471722030da063" 
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    
+    let allStudents = [];
+    let today = new Date().toISOString().split('T')[0];
+    let currentAbsentList = [];
+
+    async function init() {
+        // ١. هێنانی هەموو قوتابیان بۆ ناسینەوەی کارتەکان
+        const snap = await getDocs(collection(db, "students"));
+        allStudents = snap.docs.map(d => ({
+            ...d.data(), 
+            searchID: String(d.data().cardID).trim().toUpperCase() 
+        }));
+        
+        // ٢. چاودێری کردنی بەشی "Present" بۆ ڕۆژی دیاریکراو
+        const presentRef = collection(db, "Attendance", today, "Present");
+        onSnapshot(presentRef, (s) => {
+            const presentIDs = s.docs.map(d => String(d.id).trim().toUpperCase());
+            render(presentIDs);
+        });
+    }
+
+    function render(presentIDs) {
+        const absentUI = document.getElementById('absentList');
+        absentUI.innerHTML = "";
+        currentAbsentList = [];
+        
+        allStudents.forEach(st => {
+            if (!presentIDs.includes(st.searchID)) {
+                currentAbsentList.push(st);
+                const li = document.createElement('div');
+                li.className = "absent-item";
+                li.innerHTML = `<span>${st.name}</span> <button class="btn" style="padding:5px 10px; font-size:0.7rem; background:var(--success)" onclick="window.processScan('${st.searchID}')">ئامادە</button>`;
+                absentUI.appendChild(li);
+            }
+        });
+
+        document.getElementById('pCount').innerText = presentIDs.length;
+        document.getElementById('aCount').innerText = currentAbsentList.length;
+    }
+
+    window.processScan = async (scannedID) => {
+        const id = String(scannedID).trim().toUpperCase();
+        const st = allStudents.find(s => s.searchID === id);
+
+        if (st) {
+            document.getElementById('stuName').innerText = st.name;
+            document.getElementById('stuClass').innerText = "پۆلی: " + (st.class || "");
+            document.getElementById('stuImg').src = `images/${st.photoName || "default.jpg"}`;
+            const feedback = document.getElementById('scanFeedback');
+            feedback.innerText = "ئامادە کرا ✅";
+            feedback.style.color = "var(--success)";
+            setTimeout(() => feedback.innerText = "", 3000);
+
+            // تۆمارکردن لە: Attendance -> [Today] -> Present -> [CardID]
+            const docRef = doc(db, "Attendance", today, "Present", st.cardID.toString());
+            await setDoc(docRef, { 
+                name: st.name, 
+                class: st.class || "", 
+                time: new Date().toLocaleTimeString('en-GB') 
+            });
+        } else {
+            const feedback = document.getElementById('scanFeedback');
+            feedback.innerText = "ئایدی (" + id + ") تۆمار نییە! ❌";
+            feedback.style.color = "var(--danger)";
+        }
+    };
+
+    window.finishDay = async () => {
+        if (currentAbsentList.length === 0) return alert("هیچ غایبێک نییە.");
+        if (confirm(`ئایا دڵنیای؟ ${currentAbsentList.length} قوتابی غایب دەکرێن.`)) {
+            for (const st of currentAbsentList) {
+                // تۆمارکردن لە: Attendance -> [Today] -> Absent -> [CardID]
+                const docRef = doc(db, "Attendance", today, "Absent", st.cardID.toString());
+                await setDoc(docRef, {
+                    name: st.name,
+                    class: st.class || "",
+                    status: "غایب"
+                });
+            }
+            alert("تەواو! هەموو غایبەکان لە بەشی Absent تۆمار کران.");
+        }
+    };
+
+    init();
+</script>
+
+<script>
+    let port;
+    let reader;
+
+    async function toggleArduino() {
+        const btn = document.getElementById('connBtn');
+        if (!port) {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 9600 });
+                btn.innerText = "❌ دیسکۆنێکت (ئاردینۆ)";
+                btn.style.background = "var(--danger)";
+                readSerial();
+            } catch (e) { alert("پەیوەست نەکرا!"); }
+        } else {
+            // باشترین ڕێگە بۆ دیسکۆنێکت کردن بەبێ قوفڵ بوونی پۆرتەکە
+            if(confirm("ئایا دەتەوێت پەیوەندییەکە بپچڕێنیت؟")) {
+                location.reload();
+            }
+        }
+    }
+
+    async function readSerial() {
+        const decoder = new TextDecoder();
+        while (port && port.readable) {
+            reader = port.readable.getReader();
+            try {
+                let serialBuf = "";
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    serialBuf += decoder.decode(value);
+                    if (serialBuf.includes("\n") || serialBuf.includes("\r")) {
+                        const cleanID = serialBuf.replace(/[^a-zA-Z0-9]/g, "").trim().toUpperCase();
+                        if (cleanID && window.processScan) window.processScan(cleanID);
+                        serialBuf = "";
+                    }
+                }
+            } catch (e) { break; } 
+            finally { reader.releaseLock(); }
+        }
+    }
+</script>
+</body>
+</html>
